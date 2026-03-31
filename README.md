@@ -5,6 +5,7 @@
 ## Основные команды
 
 - `scripts/project_ops.sh menu` — интерактивное меню
+- `scripts/project_ops.sh repo-init` — создать или подключить GitHub repo
 - `scripts/project_ops.sh release ...` — релиз Docker image и опционально git tag
 - `scripts/project_ops.sh deploy ...` — локальный deploy на сервере
 - `scripts/project_ops.sh remote-deploy ...` — загрузка toolkit на сервер и запуск deploy по SSH
@@ -20,8 +21,9 @@
 2. Выбрать:
 - `1` — создать профиль проекта
 - `4` — заполнить secrets по `.env.example`
-- `5` — сделать релиз в Docker Hub и Git
-- `7` — задеплоить на сервер по SSH
+- `5` — создать или подключить GitHub repo и выбрать `public/private`
+- `7` — сделать релиз в Docker Hub и Git
+- `9` — задеплоить на сервер по SSH
 
 После первого заполнения профиля дальше релиз и деплой делаются через меню за несколько вопросов:
 - номер сборки или тип bump
@@ -35,6 +37,7 @@
 
 Профиль содержит:
 - локальный путь к репозиторию
+- GitHub owner/repo/visibility/protocol
 - Docker image repo
 - настройки git release
 - repo URL для deploy
@@ -44,6 +47,22 @@
 - пути, куда toolkit и secrets будут копироваться на сервер
 
 Secrets хранятся отдельно в `secrets/*.deploy.env` и не передаются в командной строке.
+
+## GitHub repo setup
+
+`project_repo_init.sh` умеет:
+- создать GitHub repository через `gh`
+- выбрать `public` или `private`
+- настроить `origin` на `https` или `ssh`
+- при необходимости сразу сделать `git push -u origin <branch>`
+
+Пример:
+
+```bash
+/Users/aleksey/Documents/deploy/scripts/project_ops.sh repo-init \
+  --config /Users/aleksey/Documents/deploy/examples/project.env.example \
+  --push
+```
 
 ## Что делает релиз
 

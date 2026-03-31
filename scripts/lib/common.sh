@@ -156,3 +156,66 @@ detect_compose_cmd() {
   fi
   die "docker compose is not available"
 }
+
+parse_github_repo_slug() {
+  local url="${1:-}"
+  if [[ "$url" =~ ^git@github\.com:([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  if [[ "$url" =~ ^ssh://git@github\.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  if [[ "$url" =~ ^https://github\.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  return 1
+}
+
+parse_github_protocol() {
+  local url="${1:-}"
+  case "$url" in
+    git@github.com:*|ssh://git@github.com/*)
+      printf 'ssh\n'
+      return 0
+      ;;
+    https://github.com/*)
+      printf 'https\n'
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+remote_url_for_protocol() {
+  local owner="$1"
+  local repo_name="$2"
+  local protocol="$3"
+  case "$protocol" in
+    ssh)
+      printf 'git@github.com:%s/%s.git\n' "$owner" "$repo_name"
+      ;;
+    https)
+      printf 'https://github.com/%s/%s.git\n' "$owner" "$repo_name"
+      ;;
+    *)
+      die "unsupported git protocol: $protocol"
+      ;;
+  esac
+}
+
+detect_gh_login() {
+  if ! command -v gh >/dev/null 2>&1; then
+    return 1
+  fi
+  gh api user -q .login 2>/dev/null || true
+}
+
+detect_gh_git_protocol() {
+  if ! command -v gh >/dev/null 2>&1; then
+    return 1
+  fi
+  gh config get -h github.com git_protocol 2>/dev/null || true
+}

@@ -11,12 +11,14 @@ Usage:
 
 Commands:
   menu           Interactive wizard for profiles, secrets, release, deploy
+  repo-init      Create or connect a GitHub repo and configure origin
   release        Build and publish Docker image, optionally push git tag
   deploy         Local deploy inside a target server
   remote-deploy  Copy toolkit to server over SSH and run deploy there
 
 Examples:
   scripts/project_ops.sh menu
+  scripts/project_ops.sh repo-init --help
   scripts/project_ops.sh release --help
   scripts/project_ops.sh deploy --help
   scripts/project_ops.sh remote-deploy --help
@@ -33,6 +35,10 @@ main() {
     menu)
       shift
       exec "$SCRIPT_DIR/project_menu.sh" "$@"
+      ;;
+    repo-init)
+      shift
+      exec "$SCRIPT_DIR/project_repo_init.sh" "$@"
       ;;
     release)
       shift

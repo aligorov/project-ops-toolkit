@@ -8,6 +8,7 @@ PROFILE_DIR="$WORKSPACE_DIR/profiles"
 SECRET_DIR="$WORKSPACE_DIR/secrets"
 RELEASE_SCRIPT="$SCRIPT_DIR/project_release.sh"
 REMOTE_DEPLOY_SCRIPT="$SCRIPT_DIR/remote_deploy.sh"
+REPO_INIT_SCRIPT="$SCRIPT_DIR/project_repo_init.sh"
 
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -146,6 +147,29 @@ select_menu_option() {
   done
 }
 
+prompt_enum() {
+  local label="$1"
+  local default_value="$2"
+  shift 2
+  local -a options=("$@")
+  local answer=""
+  local option=""
+
+  while true; do
+    printf '%s [%s] (варианты: %s): ' "$label" "$default_value" "$(join_csv "${options[@]}")" >&2
+    IFS= read -r answer
+    answer="$(trim_value "$answer")"
+    [[ -n "$answer" ]] || answer="$default_value"
+    for option in "${options[@]}"; do
+      if [[ "$answer" == "$option" ]]; then
+        printf '%s\n' "$answer"
+        return 0
+      fi
+    done
+    echo "Допустимые значения: $(join_csv "${options[@]}")." >&2
+  done
+}
+
 ensure_state_dirs() {
   mkdir -p "$PROFILE_DIR" "$SECRET_DIR"
 }
@@ -204,6 +228,19 @@ detect_git_branch() {
   git -C "$root_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true
 }
 
+split_repo_slug() {
+  local slug="${1:-}"
+  local prefix="${2:-}"
+  if [[ "$slug" =~ ^([^/]+)/([^/]+)$ ]]; then
+    printf -v "${prefix}_OWNER" '%s' "${BASH_REMATCH[1]}"
+    printf -v "${prefix}_REPO" '%s' "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  printf -v "${prefix}_OWNER" '%s' ""
+  printf -v "${prefix}_REPO" '%s' ""
+  return 1
+}
+
 detect_package_version() {
   local root_dir="$1"
   local package_path="$root_dir/package.json"
@@ -259,6 +296,11 @@ write_profile_file() {
   write_var_line "$profile_path" "GIT_REMOTE" "$PROFILE_GIT_REMOTE"
   write_var_line "$profile_path" "GIT_BRANCH" "$PROFILE_GIT_BRANCH"
   write_var_line "$profile_path" "GIT_TAG_PREFIX" "$PROFILE_GIT_TAG_PREFIX"
+  write_var_line "$profile_path" "GIT_PROTOCOL" "$PROFILE_GIT_PROTOCOL"
+  write_var_line "$profile_path" "GITHUB_OWNER" "$PROFILE_GITHUB_OWNER"
+  write_var_line "$profile_path" "GITHUB_REPO_NAME" "$PROFILE_GITHUB_REPO_NAME"
+  write_var_line "$profile_path" "GITHUB_REPO_VISIBILITY" "$PROFILE_GITHUB_REPO_VISIBILITY"
+  write_var_line "$profile_path" "GITHUB_REPO_DESCRIPTION" "$PROFILE_GITHUB_REPO_DESCRIPTION"
   write_array_line "$profile_path" "RELEASE_PACKAGE_JSONS" "${release_package_jsons[@]-}"
 
   write_var_line "$profile_path" "REPO_URL" "$PROFILE_REPO_URL"
@@ -410,6 +452,13 @@ setup_profile_wizard() {
   local default_root=""
   local current_branch=""
   local current_remote=""
+  local current_remote_slug=""
+  local current_remote_protocol=""
+  local current_owner=""
+  local current_repo=""
+  local default_owner=""
+  local default_protocol=""
+  local derived_repo_url=""
   local package_csv=""
   local compose_csv=""
   local services_csv=""
@@ -448,6 +497,14 @@ setup_profile_wizard() {
     current_remote="${REPO_URL:-}"
   fi
 
+  current_remote_slug="$(parse_github_repo_slug "$current_remote" || true)"
+  current_remote_protocol="$(parse_github_protocol "$current_remote" || true)"
+  split_repo_slug "$current_remote_slug" "CURRENT_REMOTE"
+  current_owner="${CURRENT_REMOTE_OWNER:-}"
+  current_repo="${CURRENT_REMOTE_REPO:-}"
+  default_owner="$(detect_gh_login || true)"
+  default_protocol="$(detect_gh_git_protocol || true)"
+
   PROFILE_RELEASE_REPO="$(prompt_text "Docker image repo (user/image)" "${RELEASE_REPO:-${IMAGE_REPO:-}}")"
   PROFILE_VERSION_FILE="$(prompt_text "Файл версии" "${VERSION_FILE:-VERSION}")"
   PROFILE_DOCKERFILE="$(prompt_text "Путь к Dockerfile" "${DOCKERFILE:-Dockerfile}")"
@@ -458,6 +515,11 @@ setup_profile_wizard() {
   PROFILE_GIT_REMOTE="$(prompt_text "Git remote для релиза" "${GIT_REMOTE:-origin}")"
   PROFILE_GIT_BRANCH="$(prompt_text "Git branch для релиза" "${GIT_BRANCH:-$current_branch}")"
   PROFILE_GIT_TAG_PREFIX="$(prompt_text "Префикс git tag" "${GIT_TAG_PREFIX:-v}")"
+  PROFILE_GITHUB_OWNER="$(prompt_text "GitHub owner/org" "${GITHUB_OWNER:-${current_owner:-$default_owner}}")"
+  PROFILE_GITHUB_REPO_NAME="$(prompt_text "GitHub repo name" "${GITHUB_REPO_NAME:-${current_repo:-$slug}}")"
+  PROFILE_GITHUB_REPO_VISIBILITY="$(prompt_enum "GitHub visibility" "${GITHUB_REPO_VISIBILITY:-private}" "public" "private")"
+  PROFILE_GITHUB_REPO_DESCRIPTION="$(prompt_text "GitHub repo description" "${GITHUB_REPO_DESCRIPTION:-}")"
+  PROFILE_GIT_PROTOCOL="$(prompt_enum "Git protocol для origin" "${GIT_PROTOCOL:-${current_remote_protocol:-${default_protocol:-https}}}" "https" "ssh")"
 
   package_csv="$(join_csv "${RELEASE_PACKAGE_JSONS[@]-}")"
   if [[ -z "$package_csv" ]]; then
@@ -467,7 +529,11 @@ setup_profile_wizard() {
   parse_csv_array "$package_csv"
   release_package_jsons=("${PARSED_ARRAY[@]-}")
 
-  PROFILE_REPO_URL="$(prompt_text "Git URL для deploy на сервер" "${REPO_URL:-$current_remote}")"
+  derived_repo_url=""
+  if [[ -n "$PROFILE_GITHUB_OWNER" && -n "$PROFILE_GITHUB_REPO_NAME" ]]; then
+    derived_repo_url="$(remote_url_for_protocol "$PROFILE_GITHUB_OWNER" "$PROFILE_GITHUB_REPO_NAME" "$PROFILE_GIT_PROTOCOL")"
+  fi
+  PROFILE_REPO_URL="$(prompt_text "Git URL для deploy на сервер" "${REPO_URL:-${current_remote:-$derived_repo_url}}")"
   PROFILE_APP_DIR="$(prompt_text "Папка приложения на сервере" "${APP_DIR:-/opt/$slug}")"
   PROFILE_MAIN_BRANCH="$(prompt_text "Основная ветка deploy" "${MAIN_BRANCH:-$PROFILE_GIT_BRANCH}")"
   PROFILE_COMPOSE_DIR="$(prompt_text "Каталог для docker compose внутри APP_DIR" "${COMPOSE_DIR:-.}")"
@@ -513,6 +579,28 @@ setup_profile_wizard() {
     mkdir -p "$(dirname "$PROFILE_LOCAL_SECRETS_FILE")"
     write_secret_file_from_template "$PROFILE_DEPLOY_ENV_TEMPLATE" "$PROFILE_LOCAL_SECRETS_FILE" "$PROFILE_LOCAL_SECRETS_FILE"
   fi
+}
+
+run_repo_init_wizard() {
+  local dry_run="${1:-0}"
+  local profile_path=""
+  local push_after_setup=0
+  local cmd=()
+
+  profile_path="$(choose_profile_path)" || return 0
+  # shellcheck source=/dev/null
+  source "$profile_path"
+
+  push_after_setup="$(prompt_yes_no "Сразу выполнить git push после настройки origin?" 0)"
+
+  cmd=("$REPO_INIT_SCRIPT" --config "$profile_path")
+  [[ "$push_after_setup" -eq 1 ]] && cmd+=(--push)
+  [[ "$dry_run" -eq 1 ]] && cmd+=(--dry-run)
+
+  echo
+  echo "Команда repo-init:"
+  quote_cmd "${cmd[@]}"
+  run_cmd "${cmd[@]}"
 }
 
 show_profiles() {
@@ -636,10 +724,12 @@ menu_loop() {
     echo "2. Показать список профилей"
     echo "3. Показать содержимое профиля"
     echo "4. Заполнить или обновить secrets"
-    echo "5. Запустить релиз в Git + Docker"
-    echo "6. Dry-run релиза"
-    echo "7. Деплой на удалённый сервер по SSH"
-    echo "8. Dry-run деплоя"
+    echo "5. Создать или подключить GitHub repo (public/private)"
+    echo "6. Dry-run GitHub repo setup"
+    echo "7. Запустить релиз в Git + Docker"
+    echo "8. Dry-run релиза"
+    echo "9. Деплой на удалённый сервер по SSH"
+    echo "10. Dry-run деплоя"
     echo "0. Выход"
     printf 'Выберите пункт: '
     IFS= read -r choice
@@ -649,10 +739,12 @@ menu_loop() {
       2) show_profiles ;;
       3) show_profile_details ;;
       4) edit_secrets_wizard ;;
-      5) run_release_wizard 0 ;;
-      6) run_release_wizard 1 ;;
-      7) run_deploy_wizard 0 ;;
-      8) run_deploy_wizard 1 ;;
+      5) run_repo_init_wizard 0 ;;
+      6) run_repo_init_wizard 1 ;;
+      7) run_release_wizard 0 ;;
+      8) run_release_wizard 1 ;;
+      9) run_deploy_wizard 0 ;;
+      10) run_deploy_wizard 1 ;;
       0) exit 0 ;;
       *) echo "Неизвестный пункт." ;;
     esac
